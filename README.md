@@ -18,8 +18,6 @@ Kubernetesの挙動を段階的に検証し、再現できる手順・manifest�
 | kubernetes-experiments | 実験手順・manifest・整理した結果・記事草稿 |
 | [automation_kubernetes](https://github.com/degurum/automation_kubernetes) | ラボの環境構築・回収 |
 
-ラボの前提は [automation_kubernetes PR #4](https://github.com/degurum/automation_kubernetes/pull/4) を参照してください。実機検証の実施・完了は各Issueで記録します。
-
 ## ディレクトリ
 
 - `experiments/`: 各検証の手順とmanifestを置く場所
