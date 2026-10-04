@@ -1,0 +1,43 @@
+name: Trivy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trivy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trivy:
+    name: Trivy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.75.0
+          cache: false
+
+      - name: Scan repository secrets, including Markdown
+        run: >-
+          trivy fs --scanners secret --secret-config trivy-secret.yaml
+          --skip-dirs .git --exit-code 1 --no-progress .
+
+      - name: Scan experiment misconfigurations
+        run: |
+          if [ -z "$(find experiments -type f \( -name '*.yaml' -o -name '*.yml' \) -print -quit)" ]; then
+            echo 'No YAML files in experiments/: no Kubernetes manifests to assess.'
+          fi
+          trivy fs --scanners misconfig --severity HIGH,CRITICAL --exit-code 1 --no-progress experiments/
