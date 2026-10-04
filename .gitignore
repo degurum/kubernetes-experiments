@@ -1,0 +1,31 @@
+# Local configuration and credentials
+.env
+.env.*
+.aws/
+.kube/
+credentials
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Raw evidence and local lab artifacts
+*.log
+raw/
+raw-logs/
+private/
+local/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+__pycache__/
