@@ -1,0 +1,8 @@
+# Bootstrap file for kube-apiserver, NOT an object to kubectl apply.
+# All stages are retained: authentication failures can use ResponseStarted.
+# All requests are retained: failed authentication may lack user/objectRef.
+# Metadata still includes identifiers and requestURI; keep raw output private.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  - level: Metadata

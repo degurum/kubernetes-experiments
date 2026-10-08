@@ -1,0 +1,42 @@
+# Render absolute host paths outside the repository before use.
+# Requires a kind/node combination accepting kubeadm v1beta4 (Kubernetes >=1.31).
+# Environment owner selects the runtime, kind version and node image/digest.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: __AUDIT_POLICY_ABSOLUTE_PATH__
+        containerPath: /etc/kubernetes/experiment-audit-policy.yaml
+        readOnly: true
+      - hostPath: __PRIVATE_AUDIT_DIRECTORY_ABSOLUTE_PATH__
+        containerPath: /var/log/experiment-audit
+    kubeadmConfigPatches:
+      - |
+        apiVersion: kubeadm.k8s.io/v1beta4
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            - name: audit-policy-file
+              value: /etc/kubernetes/experiment-audit-policy.yaml
+            - name: audit-log-path
+              value: /var/log/experiment-audit/audit.jsonl
+            - name: audit-log-mode
+              value: blocking
+            - name: audit-log-maxage
+              value: "1"
+            - name: audit-log-maxbackup
+              value: "2"
+            - name: audit-log-maxsize
+              value: "10"
+          extraVolumes:
+            - name: experiment-audit-policy
+              hostPath: /etc/kubernetes/experiment-audit-policy.yaml
+              mountPath: /etc/kubernetes/experiment-audit-policy.yaml
+              readOnly: true
+              pathType: File
+            - name: experiment-audit-log
+              hostPath: /var/log/experiment-audit
+              mountPath: /var/log/experiment-audit
+              readOnly: false
+              pathType: Directory
