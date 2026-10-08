@@ -1,0 +1,47 @@
+# Disposable lab only. No workloads, secrets, or cluster-wide permission grants.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: api-audit-lab
+  labels:
+    experiments.kubernetes.io/fixture: api-audit-lab
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: api-audit-other
+  labels:
+    experiments.kubernetes.io/fixture: api-audit-lab
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reader
+  namespace: api-audit-lab
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample
+  namespace: api-audit-lab
+data:
+  message: synthetic-fixture
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample
+  namespace: api-audit-other
+data:
+  message: synthetic-fixture
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: configmap-reader
+  namespace: api-audit-lab
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]

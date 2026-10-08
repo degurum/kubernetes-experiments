@@ -2,6 +2,8 @@
 
 検証ごとに、次の内容をMarkdownで残します。
 
+[case-template.md](case-template.md) に沿って一 case ずつ記録します。状態・判断の正本は common_private。ここには公開可能な無害化結果だけを置きます。
+
 - 対応するIssue、検証日、バージョンと設定条件
 - 仮説と最小操作
 - API応答と、無害化したログの抜粋
