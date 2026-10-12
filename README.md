@@ -1,6 +1,6 @@
 # Kubernetes Experiments
 
-Kubernetesの挙動を段階的に検証し、再現できる手順・manifest・整理した結果・記事草稿を残す公開リポジトリです。現在は検証計画と記録用の最小構成を用意した段階です。
+Kubernetesの挙動を段階的に検証し、再現できる手順・manifest・整理した結果・記事草稿を残す公開リポジトリです。実験ごとに手順と記録用の構成を置き、期待する挙動と実測結果を分けて記録します。
 
 ## 検証計画
 
@@ -8,6 +8,7 @@ Kubernetesの挙動を段階的に検証し、再現できる手順・manifest�
 | --- | --- | --- |
 | [API ServerとRBAC](https://github.com/degurum/kubernetes-experiments/issues/1) | [experiments/api-server-rbac](experiments/api-server-rbac/) | 正常なAPI操作と監査 → 許可・拒否 → 権限照会と実操作 → RBACの発展的な検証 |
 | [認証経路と監査の限界](https://github.com/degurum/kubernetes-experiments/issues/2) | [experiments/authentication](experiments/authentication/) | 標準構成の認証 → 診断ログ → API到達前の失敗 → 必要時の外部認証・後続範囲 |
+| [CNI・Service・NetworkPolicy](experiments/cni-networking/) | [experiments/cni-networking](experiments/cni-networking/) | Calico＋kube-proxy → DNS・readiness・Policyの観測 → Cilium replacementで再構築・比較 |
 
 各段階で「仮説／条件／最小操作／応答とログ／結論・限界／後片付け」を記録します。最初の記事は各計画の1〜3を範囲とし、後続の検証は段階を分けます。PSAを含むAdmission制御は今回の対象外です。
 

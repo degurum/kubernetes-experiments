@@ -1,0 +1,6 @@
+kubeProxyReplacement: true
+routingMode: tunnel
+tunnelProtocol: vxlan
+MTU: 1400
+ipam:
+  mode: kubernetes
