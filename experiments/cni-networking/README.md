@@ -50,6 +50,8 @@ kind単体で1 control-plane＋2 workerを、構成ごとに再作成します�
 
 Aで実験するときに実行します。準備後は「基準状態」へ進み、Bの導入は飛ばします。
 
+Calico v3.33.0のnative v3 manifestは`MutatingAdmissionPolicy`と`MutatingAdmissionPolicyBinding`を使います。Kubernetes v1.35では既定で無効なため、`kind-calico.yaml`でfeature gateと`admissionregistration.k8s.io/v1beta1`の両方を有効にしています。作成後のAPI一覧に両方が`v1beta1`で現れることを確認します。`no matches for kind`で失敗した場合は先へ進まず、設定を確認し、この実験用クラスタだけ作り直してください。[Kubernetes v1.35の必要設定](https://v1-35.docs.kubernetes.io/docs/reference/access-authn-authz/mutating-admission-policy/)、[kindの設定](https://kind.sigs.k8s.io/docs/user/configuration/#feature-gates)
+
 ```bash
 kind get clusters
 kind create cluster --name cni-calico --config experiments/cni-networking/kind-calico.yaml
@@ -57,6 +59,7 @@ LAB_NAME=cni-calico
 LAB_CONTEXT=kind-$LAB_NAME
 k() { kubectl --context "$LAB_CONTEXT" "$@"; }
 k config view --minify
+k api-resources --api-group=admissionregistration.k8s.io
 k create -f https://raw.githubusercontent.com/projectcalico/calico/v3.33.0/manifests/v3_projectcalico_org-v1beta1.yaml
 k create -f https://raw.githubusercontent.com/projectcalico/calico/v3.33.0/manifests/tigera-operator.yaml
 k wait --for=condition=Established crd/installations.operator.tigera.io --timeout=120s
@@ -106,7 +109,11 @@ Aでは次を読みます。
 k -n kube-system get configmap kube-proxy -o yaml
 k -n kube-system get daemonset kube-proxy -o yaml
 k get installation.operator.tigera.io default -o yaml
-k get felixconfigurations.crd.projectcalico.org -o yaml
+k get felixconfigurations.projectcalico.org -o yaml
+k -n tigera-operator rollout status deployment/tigera-operator --timeout=180s
+k -n calico-system rollout status daemonset/calico-node --timeout=300s
+k -n calico-system rollout status deployment/calico-kube-controllers --timeout=180s
+k get tigerastatus
 k -n calico-system get pods -o wide
 ```
 
