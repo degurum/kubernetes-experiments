@@ -59,6 +59,11 @@ def main():
                 connection = None
             if sequence + 1 < args.count:
                 time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print(json.dumps({"time": datetime.now(timezone.utc).isoformat(),
+                          "event": "interrupted", "mode": args.mode}),
+              file=sys.stderr, flush=True)
+        return 130
     finally:
         if connection is not None:
             connection.close()
