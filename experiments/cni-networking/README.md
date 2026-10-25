@@ -26,7 +26,7 @@ kubectl version --client
 helm version
 ```
 
-進む順序は「Aの準備 → サンプル → DNS/転送 → readiness → Policy → 記録/片付け → Bで同じ手順」です。停止・watch・新規接続loop用に複数のターミナルを使います。各ターミナルでリポジトリのルートへ移動し、次の設定を入れてください。Bのときだけ`LAB_NAME=cni-cilium`へ替えます。k関数は毎回contextを指定するため、現在のkubectl contextを変更しません。
+進む順序は「Aの準備 → サンプル → DNS/転送 → readiness → Policy → 記録/片付け → Bで同じ手順」です。readinessの基本手順では、操作・既存TCP・新規TCPの3つのターミナルを使い分けます。watchによる遷移観測は追加手順です。各ターミナルでリポジトリのルートへ移動し、次の設定を入れてください。Bのときだけ`LAB_NAME=cni-cilium`へ替えます。k関数は毎回contextを指定するため、現在のkubectl contextを変更しません。
 
 ```bash
 LAB_NAME=cni-calico
@@ -211,77 +211,196 @@ Ciliumのsocket-LBではpacket生成前に選択されることがあるため�
 
 ## 2：readinessから新規接続先まで
 
-別ターミナルで、Serviceへ一つのHTTP/1.1接続を維持します。最初のJSONの `backend.pod` を切替対象にします。client.pyは同じPod UID・connection IDを確認し、切断時は自動再接続せず停止します。
+ここではbackendを1 PodだけNotReadyにし、もう1 PodはReadyのまま残します。通常ServiceのDNS回答、既存のTCP接続、新しいTCP接続の接続先を分けて確認します。
+
+### ターミナルの役割
+
+LinuxのBashを3つ開き、次の名前で使い分けます。Windowsでは、いずれも同じ実験用WSLに入ったBashです。以下のBashコマンドをPowerShellへ直接貼り付けないでください。各Bashで、同じ実験クラスターのkubeconfigを使える状態にします。
+
+| ターミナル | 実行すること | 実験中の状態 |
+| --- | --- | --- |
+| A：操作・状態確認 | 対象の特定、readiness変更、Pod・EndpointSlice・probeログ・DNS・転送状態の確認 | コマンドを順に実行する |
+| B：既存TCP | 1本のHTTP/1.1接続を維持する | client.pyを前面で実行したままにする |
+| C：新規TCP | 毎回新しいTCP接続を作る | client.pyを前面で実行したままにする |
+
+BとCでは、通信を動かしている途中に別のコマンドを入力しません。変更や状態確認はAで行います。バックグラウンド実行の`&`は使いません。
+
+**A・B・Cの各ターミナル**で、リポジトリのルートへ移動し、以下をそれぞれ実行します。構成BのCiliumを試している場合だけ、3つとも`LAB_NAME=cni-cilium`にします。「構成A/B」と「ターミナルA/B/C」は別の区分です。
 
 ```bash
-SERVICE_IP=$(k -n cni-lab get service echo -o jsonpath='{.spec.clusterIP}')
-k -n cni-lab exec client-allowed -- python -B /app/client.py "$SERVICE_IP" --mode keepalive --count 180
+# A・B・Cの各Bashで実行
+LAB_NAME=cni-calico
+LAB_CONTEXT=kind-$LAB_NAME
+k() { kubectl --context "$LAB_CONTEXT" "$@"; }
+set -o pipefail
+umask 077
+mkdir -p "$HOME/cni-lab-observations"
+OBS_DIR=$(mktemp -d "$HOME/cni-lab-observations/readiness.XXXXXXXX")
+printf 'context=%s\nこのターミナルの保存先=%s\n' "$LAB_CONTEXT" "$OBS_DIR"
+k config view --minify
+k get namespace cni-lab --show-labels
 ```
 
-操作側でも同じLAB_CONTEXTとk関数を設定します。対象名は上の出力から選び、勝手に別Podを選びません。
+変数と関数はターミナル間で共有されません。Aで設定した`TARGET_POD`などをBやCへ入力し直す必要はありません。B・CはService IPをそれぞれ取得します。`OBS_DIR`も各ターミナルで別のディレクトリを作るため、同じファイルへ並行して書き込みません。役割A/B/Cと保存先を対応付けて控えてください。生ログはリポジトリ外に保存し、そのままcommitしません。
+
+端末全体を`script`などで記録する場合も、**ターミナルごとに異なる出力ファイル**を使います。同じファイルへの追記や、既存の記録シェル内での二重起動は避けます。この節の`tee`は観測データ用で、端末全体の記録とは別です。Bashのコマンド履歴は設定によって終了時に共通ファイルへ追記されるため、端末別の観測記録としては使いません。
+
+### A：開始前の状態を確認する
 
 ```bash
-read -r -p '既存接続の初回JSONに出たbackend Pod名: ' TARGET_POD
-k -n cni-lab get pod "$TARGET_POD" -o yaml
+# ターミナルA
+k -n cni-lab get pods -l app=echo -o wide
+k -n cni-lab wait --for=condition=Ready pod -l app=echo --timeout=120s
+k -n cni-lab get networkpolicies
+k -n cni-lab get service echo -o yaml
+```
+
+backendが2 PodともReadyで、NetworkPolicyがないことを確認します。そうでなければ先へ進まず、サンプルの準備状態へ戻してください。実験中はDeploymentの更新・scale・Podの削除を行いません。
+
+### B：既存TCPを開始する
+
+```bash
+# ターミナルB
+SERVICE_IP=$(k -n cni-lab get service echo -o jsonpath='{.spec.clusterIP}')
+k -n cni-lab exec client-allowed -- \
+  python -B /app/client.py "$SERVICE_IP" --mode keepalive --count 1800 \
+  2>"$OBS_DIR/keepalive.stderr.log" | tee "$OBS_DIR/keepalive.jsonl"
+```
+
+最初のJSONの`backend.pod`と`backend.uid`を見ます。この**既存接続が実際に選んだPod**だけを後でNotReadyにします。Bはそのまま動かし続けます。出力がない、JSONに`error`がある、またはHTTPが200でない場合はAの操作へ進まず、JSONと`keepalive.stderr.log`を確認します。
+
+client.pyはPod名・UID・connection IDが同じか確認し、切断時は自動再接続せず停止します。`--count 1800`は手打ち時間を確保するための有限回数です。回数到達による正常終了、手動のCtrl+C、通信エラーによる停止を区別してください。終了した後に再実行した接続は、元の既存TCPとは別の観測です。
+
+### A：Bの接続先を1回だけ指定する
+
+```bash
+# ターミナルAだけで実行。Bの初回JSONから入力する
+read -r -p 'Bの初回JSONにある backend.pod: ' TARGET_POD
+k -n cni-lab get pod "$TARGET_POD" \
+  -o jsonpath='{.metadata.name}{"\t"}{.metadata.uid}{"\t"}{.metadata.labels.app}{"\t"}{.status.podIP}{"\n"}'
+```
+
+表示されたPod名・UIDがBの初回JSONと一致し、appラベルが`echo`であることを確認してから進みます。`client-allowed`は通信を送るPodで、変更対象のbackendではありません。違うPodを選ぶと、既存TCPとreadiness変更の関係を比較できません。
+
+```bash
+# ターミナルA
 TARGET_IP=$(k -n cni-lab get pod "$TARGET_POD" -o jsonpath='{.status.podIP}')
+START_UTC=$(date -u +%FT%TZ)
+# 「1：DNSとService転送」で確認した実際のcluster domainを使う
+CLUSTER_DOMAIN=cluster.local
+SERVICE_FQDN=echo.cni-lab.svc.$CLUSTER_DOMAIN.
 ```
 
-logs用ターミナルにも同じTARGET_PODを設定してから、probe応答を読みます。
+`app=echo`は全backendの取得には使えますが、このDeploymentの2 Podに共通するラベルです。**Bの接続先1 Podを特定する指定にはなりません。** `kubectl exec`には`-l`がなく、`exec deployment/echo`もBの接続先と同じPodを選ぶ保証はありません。この手順では`TARGET_POD`をAだけに保持し、全体の確認にはラベルselectorを使います。
+
+専用ラベルを1 Podに付ける方法でも、Bの接続先との最初の対応付けと「一致が1 Podだけ」の確認は必要です。同じDeploymentのPod templateにラベルを書くと両方に付きます。Serviceのselectorや既存の`app`ラベルを変えてbackendを外す操作は、ここでは行いません。
+
+### C：新規TCPを開始する
 
 ```bash
-k -n cni-lab logs -f "$TARGET_POD" --timestamps
-```
-
-さらに二つのターミナルを使い、一方では同じTARGET_PODを設定してPod Readyをwatchし、もう一方ではService labelで取得した全EndpointSliceをwatchします。resourceVersion、ReadyのlastTransitionTime、Sliceのaddress・conditions.ready/serving/terminatingを保存し、観測側のUTC時刻も付けます。
-
-```bash
-k -n cni-lab get pod "$TARGET_POD" --watch --output-watch-events -o json
-```
-
-```bash
-k -n cni-lab get endpointslices -l kubernetes.io/service-name=echo --watch --output-watch-events -o json
-```
-
-さらに、新規接続loopを別に動かします。このターミナルではService IPを再取得します。watchとlogsは別々のターミナルで動かし、Ctrl+Cで止めます。
-
-```bash
+# ターミナルC
 SERVICE_IP=$(k -n cni-lab get service echo -o jsonpath='{.spec.clusterIP}')
-k -n cni-lab exec client-allowed -- python -B /app/client.py "$SERVICE_IP" --mode new --count 120
+k -n cni-lab exec client-allowed -- \
+  python -B /app/client.py "$SERVICE_IP" --mode new --count 1800 \
+  2>"$OBS_DIR/new.stderr.log" | tee "$OBS_DIR/new.jsonl"
 ```
 
-操作ターミナルでは、logsやwatchを走らせず、先にTARGET_PODとTARGET_IPを設定します。flag変更と、その後の状態を順に記録します。失敗中にも対象Pod IPへ直接アクセスし、データ応答を確認します。
+Cは各リクエストで新しいTCP接続を作ります。`backend.pod`を見て、最初は両backendが選ばれることを確認します。短い区間で均等に分散するとは限りません。Cも動かしたままにしてAへ戻ります。
+
+Cだけを再実行する場合は、Cで次のコマンドを実行して新しい保存先を作り、通信コマンドを実行します。以前のログを上書きせず、別の新規接続観測として記録します。
+
+Bが終了して観測し直す場合は、まずCをCtrl+Cで止めます。AでNotReadyに変更済みなら、以前の`TARGET_POD`を保持したまま「A：readinessを回復させる」の手順で回復させます。両backendがReadyであることを確認してから、**A・B・Cすべてで**新しい`OBS_DIR`を作ります。その後「B：既存TCPを開始する」から順にやり直し、Aの`TARGET_POD`と`START_UTC`も新しい観測の値に設定し直してください。
 
 ```bash
-k -n cni-lab exec "$TARGET_POD" -- python -c 'from pathlib import Path; from datetime import datetime,timezone; Path("/state/not-ready").touch(); print(datetime.now(timezone.utc).isoformat(),"readiness-fail")'
+# Cだけを再実行するならCで、Bから観測し直すならA・B・Cで実行
+OBS_DIR=$(mktemp -d "$HOME/cni-lab-observations/readiness.XXXXXXXX")
+printf '新しい観測の保存先=%s\n' "$OBS_DIR"
+```
+
+### A：正常時の状態を保存する
+
+```bash
+# ターミナルA。コマンドは同時ではなく順に実行される
+(
+  set -e
+  date -u +%FT%TZ
+  k -n cni-lab get pods -l app=echo -o yaml
+  k -n cni-lab get endpointslices -l kubernetes.io/service-name=echo -o yaml
+  k -n cni-lab logs -l app=echo -c echo --prefix --timestamps --tail=-1 --since-time="$START_UTC"
+  k -n cni-lab exec dns-probe -- dig "$SERVICE_FQDN" A +stats
+) 2>&1 | tee -a "$OBS_DIR/normal.log"
+```
+
+括弧内は取得エラーで停止します。途中のエラーが出た場合は次の状態へ進まず、原因を確認して取り直してください。`tee -a`は同じ状態の再取得を追記し、以前のsnapshotを残します。各API取得は順次実行されるため、同一時刻の原子的な全体像ではありません。
+
+続けて、**Aで**「転送状態の観測」の該当構成のコマンドを実行します。Calicoでは同じkindノード、Ciliumでは同じagentを正常・失敗・回復で比較します。Ciliumを使う場合の`CILIUM_POD`もAで設定します。
+
+### A：対象だけをNotReadyにする
+
+```bash
+# ターミナルA
+k -n cni-lab exec "$TARGET_POD" -- python -c 'from pathlib import Path; from datetime import datetime,timezone; Path("/state/not-ready").touch(); print(datetime.now(timezone.utc).isoformat(),"readiness-fail")' \
+  2>&1 | tee -a "$OBS_DIR/readiness-fail.log"
 k -n cni-lab wait --for=condition=Ready=false "pod/$TARGET_POD" --timeout=120s
-k -n cni-lab exec client-allowed -- python -B /app/client.py "$TARGET_IP" --path /whoami --count 2
-k -n cni-lab exec client-allowed -- python -B /app/client.py "$TARGET_IP" --path /livez --count 1
-date -u +%FT%TZ
-k -n cni-lab get pod "$TARGET_POD" -o yaml
-k -n cni-lab get endpointslices -l kubernetes.io/service-name=echo -o yaml
 ```
 
-回復させる前に、上の「転送状態の観測」と同じノードの規則/mapを再取得し、新規接続loopのbackendと照合します。DNS用のターミナルでFQDNも再問い合わせます。観測loopが終了していた場合は新しい観測として開始し直し、既存TCPが切断された観測とは区別します。記録後、操作ターミナルで回復させます。
+Aの`wait`は対象PodのReady=Falseを待つだけで、全ノードの転送設定の反映完了までは保証しません。Bの既存TCPを止めず、Cの新規接続先と次の状態を確認します。
 
 ```bash
-k -n cni-lab exec "$TARGET_POD" -- python -c 'from pathlib import Path; from datetime import datetime,timezone; Path("/state/not-ready").unlink(missing_ok=True); print(datetime.now(timezone.utc).isoformat(),"readiness-recover")'
+# ターミナルA
+(
+  set -e
+  date -u +%FT%TZ
+  k -n cni-lab get pods -l app=echo -o yaml
+  k -n cni-lab get endpointslices -l kubernetes.io/service-name=echo -o yaml
+  k -n cni-lab logs -l app=echo -c echo --prefix --timestamps --tail=-1 --since-time="$START_UTC"
+  k -n cni-lab exec client-allowed -- python -B /app/client.py "$TARGET_IP" --path /whoami --count 2
+  k -n cni-lab exec client-allowed -- python -B /app/client.py "$TARGET_IP" --path /livez --count 1
+  k -n cni-lab exec dns-probe -- dig "$SERVICE_FQDN" A +stats
+) 2>&1 | tee -a "$OBS_DIR/not-ready.log"
+```
+
+もう一方のbackendがReadyのままか確認します。EndpointSliceでは対象のaddress・targetRefと`conditions.ready/serving/terminating`を対応付けます。IPそのものがSliceから消えるとは限りません。変更直後のSliceがまだ正常時の状態なら、Aで状態を取り直し、Cの接続先の変化と区別して記録します。
+
+**回復させる前にAで**同じノードの規則/mapを再取得します。Cで対象Podが新規に選ばれなくなったこと、Bの既存接続が継続したか停止したかを記録します。NotReadyでもPod IPへの直接通信では`/whoami`と`/livez`が200を返す設計です。
+
+probeログは`--prefix`でPod名・コンテナ名が付き、2 Podの行を区別できます。Pod間で時刻順に並ぶとは限らないため、付与されたUTC時刻を照合します。各snapshotで`START_UTC`以降を読み直すので、同じprobe行が再掲されることがあります。
+
+### A：readinessを回復させる
+
+```bash
+# ターミナルA
+k -n cni-lab exec "$TARGET_POD" -- python -c 'from pathlib import Path; from datetime import datetime,timezone; Path("/state/not-ready").unlink(missing_ok=True); print(datetime.now(timezone.utc).isoformat(),"readiness-recover")' \
+  2>&1 | tee -a "$OBS_DIR/readiness-recover.log"
 k -n cni-lab wait --for=condition=Ready "pod/$TARGET_POD" --timeout=120s
-date -u +%FT%TZ
-k -n cni-lab get pod "$TARGET_POD" -o yaml
-k -n cni-lab get endpointslices -l kubernetes.io/service-name=echo -o yaml
+(
+  set -e
+  date -u +%FT%TZ
+  k -n cni-lab get pods -l app=echo -o yaml
+  k -n cni-lab get endpointslices -l kubernetes.io/service-name=echo -o yaml
+  k -n cni-lab logs -l app=echo -c echo --prefix --timestamps --tail=-1 --since-time="$START_UTC"
+  k -n cni-lab exec dns-probe -- dig "$SERVICE_FQDN" A +stats
+) 2>&1 | tee -a "$OBS_DIR/recovered.log"
 ```
 
-回復後も同じ規則/map、FQDN、新規接続を再取得します。
+**Aで**同じ規則/mapを再取得し、Cで両backendが再び選ばれるか確認します。Pod名・UID・IP・restartCountも正常時と照合します。Podが再作成されていた場合は、同じPodのreadinessだけを変えた比較として扱いません。
 
-観測する連鎖は、kubeletのprobe応答→Pod Ready→EndpointSlice ready→転送規則/map→新規接続先です。API内のIPが必ず消えるとは扱わず、Ciliumのglobal backend mapにIPが残るだけでも新規選択対象とは判定しません。既存接続が継続するか切断されるかは結果であり、必須成功条件にはしません。
+### 終了と読み取り方
 
-正常・失敗・回復の各状態で、以下を実行してFQDNを再問い合わせます。
+記録後、**BとCでそれぞれCtrl+C**を押して通信観測を終了します。Aで両backendがReadyに戻っていることを確認してから、次のNetworkPolicy実験へ進みます。次節で使うPod IPもAで設定しておきます。
 
 ```bash
-k -n cni-lab exec dns-probe -- dig "$SERVICE_FQDN" A +stats
+# ターミナルA
+k -n cni-lab wait --for=condition=Ready pod -l app=echo --timeout=120s
+k -n cni-lab get pods -l app=echo -o wide
+POD_IP=$(k -n cni-lab get pod "$TARGET_POD" -o jsonpath='{.status.podIP}')
 ```
 
-予想は、通常Serviceの回答がClusterIPのままで、新規接続の対象がReadyなbackendへ変わることです。今回は別backendを常にReadyに保つので、2→1→2の変化と通常Serviceの回答ClusterIPが変わらないことを分けて確認します。反映時間を製品の一般性能順位にしません。[probe](https://kubernetes.io/docs/concepts/workloads/pods/probes/)、[EndpointSlice](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/)
+観測する関係は、probe応答 → Pod Ready → EndpointSliceのready → 転送規則/map → 新規接続先です。正常・失敗・回復で、利用可能なbackendが2→1→2へ変化する一方、通常ServiceのDNS回答はClusterIPのままと予想します。既存TCPが継続するか切断されるかは観測結果であり、必須成功条件ではありません。Ciliumのglobal backend mapにIPが残っていることだけで、新規選択対象だとは判定しません。
+
+この基本手順のAPI状態は、Aが取得した時点のsnapshotです。probeの時刻、PodのlastTransitionTime、HTTPの時刻は残しますが、全段階の遷移時刻や正確な伝播遅延を測ったことにはしません。反映時間を調べる場合は、追加の観測ターミナルでPodとEndpointSliceを別々にwatchし、resourceVersion、受信UTC時刻、全Sliceの状態を保存します。watchの出力をA・B・Cへバックグラウンドで流し込まないでください。反映時間を製品の一般性能順位にしません。
+
+参考：[readiness probe](https://v1-35.docs.kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/)、[EndpointSlice](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/)、[ラベルとselector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/)、[kubectl exec](https://v1-35.docs.kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/)、[kubectl logs](https://v1-35.docs.kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/)
 
 ## 3：NetworkPolicyの両方向
 

@@ -14,6 +14,8 @@
 | backendとclientのnode / Pod名・UID・IP・restartCount | |
 | CoreDNS image・replicas / Corefile / resolv.conf | |
 | iptables legacy/nft / Cilium replacement・socket-LB | |
+| readiness観測ID / ターミナルA・B・Cの対応 | |
+| API状態の取得方法：基本snapshot / 追加watch | |
 
 ## 観測
 
@@ -26,10 +28,16 @@
 | readiness失敗：Pod IP直接 / 既存TCPのUID・connection ID | | | |
 | readiness失敗中のFQDN回答 | | | |
 | readiness回復：同じ観測点 / IP・UID・restartCount | | | |
+| Bの既存TCP：初回backend Pod・UID・connection ID / 終了理由 | | | |
+| B/Cの再実行：新しい観測ID / 以前の観測との区切り | | | |
 | Ingress隔離 → allowed label許可 | | | |
 | Egress隔離 → backend許可、Ingressとの両方向 | | | |
 | Ingress全送信元許可の追加 → 削除、許可の和集合 | | | |
 | DNSのEgress許可追加前後、TCP 8080許可の維持 | | | |
+
+構成A/BとターミナルA/B/Cは別の区分です。各ターミナルの保存先は手元で観測IDに対応付け、生ログや個人の絶対パスを公開欄へ転記しません。
+
+基本手順のAPI状態は順次取得したsnapshotで、同一時刻の原子的な全体像ではありません。probeやHTTPの時刻と、API状態を取得した時刻を区別します。全遷移の時刻や正確な伝播遅延は、追加watch等を採取していなければ未確認とします。ログの再取得による同一時刻のprobe行の再掲を、別のリクエストとして数えません。
 
 ## 解釈と比較
 
