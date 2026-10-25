@@ -8,4 +8,6 @@
 - 観測事実、結論、断定できない範囲
 - 後片付けと確認結果
 
-生ログ・認証情報・kubeconfig・不要な識別情報は置きません。現在、実機検証の結果はありません。
+生ログ・認証情報・kubeconfig・不要な識別情報は置きません。
+
+- [2026-10-25：Calico / CiliumのCNI・Service・readiness・NetworkPolicy](cni-networking-2026-10-25.md)

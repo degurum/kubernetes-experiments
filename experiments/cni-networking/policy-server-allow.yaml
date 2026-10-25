@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: server-allow
+  namespace: cni-lab
+spec:
+  podSelector:
+    matchLabels: {app: echo}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {role: client, access: allowed}
+      ports:
+        - protocol: TCP
+          port: 8080

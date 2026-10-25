@@ -1,0 +1,10 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: server-isolate
+  namespace: cni-lab
+spec:
+  podSelector:
+    matchLabels: {app: echo}
+  policyTypes: [Ingress]
+  ingress: []

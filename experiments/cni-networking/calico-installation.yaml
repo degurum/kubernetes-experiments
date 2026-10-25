@@ -1,0 +1,14 @@
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    linuxDataplane: Iptables
+    bgp: Disabled
+    mtu: 1400
+    ipPools:
+      - cidr: 10.244.0.0/16
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()

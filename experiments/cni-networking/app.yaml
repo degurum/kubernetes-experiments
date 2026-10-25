@@ -1,0 +1,221 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+  namespace: cni-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: echo
+  template:
+    metadata:
+      labels:
+        app: echo
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: cni-lab/worker
+                    operator: Exists
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: echo
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: echo
+          image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+          command: [python, -B, /app/server.py]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 2
+            successThreshold: 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 64Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /app
+              readOnly: true
+            - name: state
+              mountPath: /state
+      volumes:
+        - name: scripts
+          configMap:
+            name: cni-lab-scripts
+        - name: state
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: cni-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: echo
+  publishNotReadyAddresses: false
+  sessionAffinity: None
+  internalTrafficPolicy: Cluster
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-allowed
+  namespace: cni-lab
+  labels:
+    role: client
+    access: allowed
+spec:
+  automountServiceAccountToken: false
+  nodeSelector:
+    cni-lab/worker: one
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: client
+      image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+      command: [python, -B, -c, "import time; time.sleep(86400)"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests: {cpu: 25m, memory: 16Mi}
+        limits: {cpu: 250m, memory: 64Mi}
+      volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+  volumes:
+    - name: scripts
+      configMap:
+        name: cni-lab-scripts
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-denied
+  namespace: cni-lab
+  labels:
+    role: client
+    access: denied
+spec:
+  automountServiceAccountToken: false
+  nodeSelector:
+    cni-lab/worker: one
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: client
+      image: python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+      command: [python, -B, -c, "import time; time.sleep(86400)"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests: {cpu: 25m, memory: 16Mi}
+        limits: {cpu: 250m, memory: 64Mi}
+      volumeMounts:
+        - name: scripts
+          mountPath: /app
+          readOnly: true
+  volumes:
+    - name: scripts
+      configMap:
+        name: cni-lab-scripts
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dns-probe
+  namespace: cni-lab
+  labels:
+    role: client
+    access: allowed
+spec:
+  automountServiceAccountToken: false
+  nodeSelector:
+    cni-lab/worker: one
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: dns
+      image: registry.k8s.io/e2e-test-images/agnhost:2.39@sha256:7e8bdd271312fd25fc5ff5a8f04727be84044eb3d7d8d03611972a6752e2e11e
+      command: [/agnhost, pause]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 64Mi}
